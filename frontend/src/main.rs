@@ -1,7 +1,6 @@
 use std::rc::Rc;
 
-use gloo_timers::callback::{Interval, Timeout};
-use js_sys::Array;
+use gloo_timers::{callback::{Interval, Timeout}, future::{IntervalStream, TimeoutFuture}};
 use yew::prelude::*;
 
 use wasm_bindgen::prelude::*;
@@ -12,6 +11,15 @@ use web_sys::{console, window};
 extern "C" {
     #[wasm_bindgen(js_name = invokeHello, catch)]
     pub async fn hello(name: String) -> Result<JsValue, JsValue>;
+}
+
+#[macro_use]
+macro_rules! dial {
+    ($progress:expr,$end:expr,$thickness:expr) => {
+        html! {
+            <Dial progress={50}
+        }
+    };
 }
 
 #[function_component]
@@ -29,16 +37,17 @@ fn App() -> Html {
     html! {
         <ContextProvider<Rc<Theme>> context={theme}>
             <div class="dial-wrapper">
-                <Dial progress={50} end={100} thickness={10}/>
+                <Dial progress={50} end={100} thickness={10} tick_time={1000} />
             </div>
         </ContextProvider<Rc<Theme>>>
     }
 }
 
-#[derive(PartialEq, Properties)]
+#[derive(Properties, PartialEq)]
 pub struct DialProps {
     progress: i32,
     end: i32,
+    tick_time: u32,
     thickness: u8,
 }
 
@@ -51,6 +60,7 @@ enum DialAction {
 struct DialState {
     progress: i32,
     end: i32,
+    tick_time: u32,
 }
 
 impl Default for DialState {
@@ -58,6 +68,7 @@ impl Default for DialState {
         Self {
             progress: 0,
             end: 100,
+            tick_time: 500,
         }
     }
 }
@@ -74,6 +85,7 @@ impl Reducible for DialState {
         Self {
             progress: next,
             end: self.end,
+            tick_time: self.tick_time,
         }
         .into()
     }
@@ -85,6 +97,7 @@ pub fn Dial(props: &DialProps) -> Html {
         progress,
         end,
         thickness,
+        tick_time
     } = props;
 
     let theme = use_context::<Rc<Theme>>().unwrap();
@@ -92,17 +105,25 @@ pub fn Dial(props: &DialProps) -> Html {
     let dial = use_reducer(|| DialState {
         progress: progress.clone(),
         end: end.clone(),
+        tick_time: tick_time.clone(),
     });
 
-    {
-        let dial = dial.clone();
+    let dial_clone = dial.clone();
 
-        let interval = use_state(|| {
-            Interval::new(1000, move || {
-                dial.dispatch(DialAction::Tick);
-            })
+    use_state(|| spawn_local(async move {
+        let dial = dial_clone.clone();
+
+        let interval = Interval::new(dial.tick_time, move || {
+            let dial = dial.clone();
+            dial.dispatch(DialAction::Tick);
         });
-    }
+
+        let dial = dial_clone.clone();
+
+        TimeoutFuture::new((dial.end - dial.progress + 1) as u32 * dial.tick_time).await;
+
+        interval.cancel();
+    }));
 
     html! {
         <div class="dial"
